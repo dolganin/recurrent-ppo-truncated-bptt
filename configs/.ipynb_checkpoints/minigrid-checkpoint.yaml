@@ -3,7 +3,7 @@ environment:
     name: "MiniGrid-MemoryS13-v0"
 gamma: 0.99
 lamda: 0.95
-updates: 500
+updates: 650
 epochs: 4
 n_workers: 16
 worker_steps: 256
@@ -32,3 +32,5 @@ clip_range_schedule:
     power: 1.0
     max_decay_steps: 300
 video_every: 20
+fps: 15
+svd_rank_frac: 1.0

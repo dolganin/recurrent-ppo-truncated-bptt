@@ -17,9 +17,8 @@ class ActorCriticModel(nn.Module):
         self.hidden_size = config["hidden_layer_size"]
         self.recurrence = config["recurrence"]
         self.observation_space_shape = observation_space.shape
-        self.svd_rank_frac = config.get("svd_rank_frac", 0.5)  # оставить 50% энергии
+        self.svd_rank_frac = config.get("svd_rank_frac", 1.0)  # оставить 50% энергии
         self.device = device
-
 
         # Observation encoder
         if len(self.observation_space_shape) > 1:
@@ -39,6 +38,7 @@ class ActorCriticModel(nn.Module):
             # Case: vector observation is available
             in_features_next_layer = observation_space.shape[0]
 
+        print(f"SVD configuration is {self.svd_rank_frac}")
         # Recurrent layer (GRU or LSTM)
         if self.recurrence["layer_type"] == "gru":
             self.recurrent_layer = nn.GRU(in_features_next_layer, self.recurrence["hidden_state_size"], batch_first=True)
@@ -76,6 +76,28 @@ class ActorCriticModel(nn.Module):
         # Value function
         self.value = nn.Linear(self.hidden_size, 1)
         nn.init.orthogonal_(self.value.weight, 1)
+        
+    def _safe_svd(self, x, energy_frac=1.0, max_try=3):
+        for i in range(max_try):
+            try:
+                U, S, Vh = torch.linalg.svd(x, full_matrices=False)
+                break
+            except RuntimeError:
+                if i == max_try - 1:
+                    return x                      # сдаёмся
+                x = x.cpu().double()             # ↑ стабильность
+    
+        if energy_frac < 1.0:                    # ← вот использование
+            energy = (S**2).cumsum(dim=0) / (S**2).sum()
+            k = int((energy < energy_frac).sum() + 1)
+            U, S, Vh = U[:, :k], S[:k], Vh[:k, :]
+    
+        return (U * S) @ Vh                      # матрица-аппроксимация
+
+    
+        e2 = S.square(); thr = e2.sum()*energy_frac
+        k = int((e2.cumsum(0) < thr).sum().clamp(min=1))
+        return (U[:, :k]*S[:k]) @ Vh[:k]
 
     def forward(self, obs:torch.tensor, recurrent_cell:torch.tensor, device:torch.device, sequence_length:int=1):
         """Forward pass of the model
@@ -127,16 +149,11 @@ class ActorCriticModel(nn.Module):
             # Reshape to the original tensor size
             h_shape = tuple(h.size())
             h = h.reshape(h_shape[0] * h_shape[1], h_shape[2])
-        # if self.svd_rank_frac is not None:
-        #     U, S, Vh = torch.linalg.svd(h, full_matrices=False)
-        #     S_squared = S**2
-        #     total_energy = S_squared.sum()
-        #     cumulative_energy = torch.cumsum(S_squared, dim=0)
-        #     k = torch.searchsorted(cumulative_energy, self.svd_rank_frac * total_energy).item() + 1
-        #     h = (U[:, :k] @ torch.diag(S[:k])) @ Vh[:k, :]
-
-        # The output of the recurrent layer is not activated as it already utilizes its own activations.
-
+        if self.svd_rank_frac is not None:
+            with torch.no_grad():
+                h_approx = self._safe_svd(h, self.svd_rank_frac)
+                h = h_approx + (h - h_approx).detach()  # градиенты без SVD
+                
         # Feed hidden layer
         h = F.relu(self.lin_hidden(h))
 

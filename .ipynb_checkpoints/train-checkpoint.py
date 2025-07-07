@@ -22,7 +22,7 @@ def main():
     config = YamlParser(options["--config"]).get_config()
 
     if not cpu:
-        device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
         if torch.cuda.is_available():
             torch.set_default_tensor_type("torch.cuda.FloatTensor")
     else:
