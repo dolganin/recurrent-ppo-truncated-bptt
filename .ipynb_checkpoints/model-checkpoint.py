@@ -17,7 +17,13 @@ class ActorCriticModel(nn.Module):
         self.hidden_size = config["hidden_layer_size"]
         self.recurrence = config["recurrence"]
         self.observation_space_shape = observation_space.shape
-        self.svd_rank_frac = config.get("svd_rank_frac", 1.0)  # оставить 50% энергии
+        self.svd_rank_frac = config.get("svd_rank_frac", None)
+        self.tt_rank_frac = config.get("tt_rank_frac", None)
+
+        if self.svd_rank_frac:
+            print(f"SVD frac for experiment is {self.svd_rank_frac}")
+        if self.tt_rank_frac:
+            print(f"TT frac for experiment is {self.tt_rank_frac}")
         self.device = device
 
         # Observation encoder
@@ -150,9 +156,16 @@ class ActorCriticModel(nn.Module):
             h_shape = tuple(h.size())
             h = h.reshape(h_shape[0] * h_shape[1], h_shape[2])
         if self.svd_rank_frac is not None:
-            with torch.no_grad():
-                h_approx = self._safe_svd(h, self.svd_rank_frac)
-                h = h_approx + (h - h_approx).detach()  # градиенты без SVD
+            approx = self.svd_low_rank_safe(memory, self.svd_rank_frac)
+            memory = approx + (memory - approx).detach()
+        
+        elif self.tt_rank is not None:
+            # memory: (B, L, blocks, D) → TT по последним осям
+            shape = memory.shape
+            mem_tt = tn.Tensor(memory.reshape(-1, shape[-2], shape[-1]), ranks_tt=self.tt_rank)
+            approx = mem_tt.full().reshape_as(memory)
+            memory = approx + (memory - approx).detach()
+
                 
         # Feed hidden layer
         h = F.relu(self.lin_hidden(h))
