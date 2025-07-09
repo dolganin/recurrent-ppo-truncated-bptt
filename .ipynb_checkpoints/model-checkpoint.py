@@ -17,13 +17,18 @@ class ActorCriticModel(nn.Module):
         self.hidden_size = config["hidden_layer_size"]
         self.recurrence = config["recurrence"]
         self.observation_space_shape = observation_space.shape
-        self.svd_rank_frac = config.get("svd_rank_frac", None)
-        self.tt_rank_frac = config.get("tt_rank_frac", None)
+        self.svd_rank_frac   = config.get("svd_rank_frac", None)
+        self.tt_rank_frac    = config.get("tt_rank_frac",  None)
+        self.gauss_filter    = config.get("gauss_filter", False)
+        self.laplace_filter  = config.get("laplace_filter", False)
+        self.enable_vae      = config.get("enable_vae", False)
 
-        if self.svd_rank_frac:
-            print(f"SVD frac for experiment is {self.svd_rank_frac}")
-        if self.tt_rank_frac:
-            print(f"TT frac for experiment is {self.tt_rank_frac}")
+        if self.svd_rank_frac:   print(f"SVD frac  = {self.svd_rank_frac}")
+        if self.tt_rank_frac:    print(f"TT  frac  = {self.tt_rank_frac}")
+        if self.gauss_filter:    print("Gaussian filter will be applied")
+        if self.laplace_filter:  print("Laplacian filter will be applied")
+        if self.enable_vae:      print("VAE filter ENABLED")
+
         self.device = device
 
         # Observation encoder
@@ -44,7 +49,6 @@ class ActorCriticModel(nn.Module):
             # Case: vector observation is available
             in_features_next_layer = observation_space.shape[0]
 
-        print(f"SVD configuration is {self.svd_rank_frac}")
         # Recurrent layer (GRU or LSTM)
         if self.recurrence["layer_type"] == "gru":
             self.recurrent_layer = nn.GRU(in_features_next_layer, self.recurrence["hidden_state_size"], batch_first=True)
@@ -83,22 +87,74 @@ class ActorCriticModel(nn.Module):
         self.value = nn.Linear(self.hidden_size, 1)
         nn.init.orthogonal_(self.value.weight, 1)
         
-    def _safe_svd(self, x, energy_frac=1.0, max_try=3):
+    def svd_low_rank_safe(self, x: torch.Tensor,
+                          energy_frac: float = 1.0, max_try: int = 3) -> torch.Tensor:
+        orig_shape = x.shape                    # (..., D)
+        x_2d = x.reshape(-1, x.shape[-1])       # (M, D)   без батча
+    
         for i in range(max_try):
             try:
-                U, S, Vh = torch.linalg.svd(x, full_matrices=False)
+                U, S, Vh = torch.linalg.svd(x_2d, full_matrices=False)
                 break
             except RuntimeError:
                 if i == max_try - 1:
-                    return x                      # сдаёмся
-                x = x.cpu().double()             # ↑ стабильность
+                    return x
+                x_2d = x_2d.cpu().double()
     
-        if energy_frac < 1.0:                    # ← вот использование
-            energy = (S**2).cumsum(dim=0) / (S**2).sum()
+        if energy_frac < 1.0:
+            energy = torch.cumsum(S ** 2, dim=-1) / (S ** 2).sum()
             k = int((energy < energy_frac).sum() + 1)
             U, S, Vh = U[:, :k], S[:k], Vh[:k, :]
     
-        return (U * S) @ Vh                      # матрица-аппроксимация
+        x_hat = (U * S.unsqueeze(-2)) @ Vh       # (M, D)
+        return x_hat.reshape(orig_shape)
+
+    def tt_low_rank_safe(self, memory: torch.Tensor,
+                         energy_frac: float = 1.0,
+                         max_rank: int = 200) -> torch.Tensor:
+        """
+        TT-аппроксимация с удержанием заданной доли энергии.
+        Возвращает dense-тензор той же формы.
+        """
+        if energy_frac >= 1.0:
+            return memory                               # ничего не сжимаем
+    
+        shape = memory.shape
+        flat  = memory.reshape(-1, shape[-2], shape[-1])
+        full_norm = torch.linalg.norm(flat)
+    
+        for r in range(1, max_rank + 1):
+            mem_tt_r = tn.Tensor(flat, ranks_tt=r)      # построить TT ранга r
+            approx   = mem_tt_r.torch()
+            if torch.linalg.norm(approx) / full_norm >= energy_frac:
+                return approx.reshape_as(memory)
+
+        return approx.reshape_as(memory)
+
+    def apply_gaussian_filter(self, memory: torch.Tensor, sigma: float = 1.0) -> torch.Tensor:
+        """
+        Gaussian 1D-фильтр по последней размерности (D) → shape: (B, blocks, D)
+        """
+        B, blocks, D = memory.shape
+        kernel_size = int(torch.ceil(torch.tensor(6 * sigma))) | 1
+        half = (kernel_size - 1) // 2
+        x = torch.arange(-half, half + 1, dtype=memory.dtype, device=memory.device)
+        kernel = torch.exp(-0.5 * (x / sigma) ** 2)
+        kernel = (kernel / kernel.sum()).view(1, 1, -1)
+    
+        mem = memory.view(B * blocks, 1, D)                      # (B*blocks, 1, D)
+        smoothed = F.conv1d(mem, kernel, padding=half)
+        return smoothed.view(B, blocks, D)
+
+    def apply_laplacian_filter(self, memory: torch.Tensor) -> torch.Tensor:
+        """
+        Лаплас-фильтр по последней оси (фичи D).
+        Работает для памяти (B, blocks, D) и (B, L, blocks, D).
+        """
+        shift_left  = torch.roll(memory,  1, dims=-1)
+        shift_right = torch.roll(memory, -1, dims=-1)
+        laplacian = shift_left + shift_right - 2 * memory
+        return memory + laplacian
 
     
         e2 = S.square(); thr = e2.sum()*energy_frac
@@ -149,22 +205,24 @@ class ActorCriticModel(nn.Module):
             h_shape = tuple(h.size())
             h = h.reshape((h_shape[0] // sequence_length), sequence_length, h_shape[1])
 
-            # Forward recurrent layer
+            # Forward recurrent laye
             h, recurrent_cell = self.recurrent_layer(h, recurrent_cell)
 
             # Reshape to the original tensor size
             h_shape = tuple(h.size())
             h = h.reshape(h_shape[0] * h_shape[1], h_shape[2])
-        if self.svd_rank_frac is not None:
-            approx = self.svd_low_rank_safe(memory, self.svd_rank_frac)
-            memory = approx + (memory - approx).detach()
-        
-        elif self.tt_rank is not None:
-            # memory: (B, L, blocks, D) → TT по последним осям
-            shape = memory.shape
-            mem_tt = tn.Tensor(memory.reshape(-1, shape[-2], shape[-1]), ranks_tt=self.tt_rank)
-            approx = mem_tt.full().reshape_as(memory)
-            memory = approx + (memory - approx).detach()
+            hidden, memory = recurrent_cell
+            
+            if self.svd_rank_frac is not None:
+                approx = self.svd_low_rank_safe(memory, self.svd_rank_frac)
+                memory = approx + (memory - approx).detach()
+            elif self.tt_rank_frac is not None:
+                approx = self.tt_low_rank_safe(memory, self.tt_rank_frac)
+                memory = approx + (memory - approx).detach()
+            elif self.gauss_filter:
+                memory = self.apply_gaussian_filter(memory)
+            elif self.laplace_filter:
+                memory = self.apply_laplacian_filter(memory)
 
                 
         # Feed hidden layer

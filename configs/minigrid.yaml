@@ -31,6 +31,8 @@ clip_range_schedule:
     final: 0.2
     power: 1.0
     max_decay_steps: 300
-video_every: 20
-fps: 15
-svd_rank_frac: 1.0
+video_every: 10
+svd_rank_frac: 0.25
+#tt_rank_frac: 0.75
+#gauss_filter: true        # или false
+#laplace_filter: true     # или true 
