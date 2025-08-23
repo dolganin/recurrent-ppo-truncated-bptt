@@ -106,14 +106,31 @@ class PPOTrainer:
             episode_result = self._process_episode_info(episode_infos)
 
             # Print training statistics
-            if "success_percent" in episode_result:
-                result = "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f} success = {:.2f} pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f} value={:.3f} advantage={:.3f}".format(
-                    update, episode_result["reward_mean"], episode_result["reward_std"], episode_result["length_mean"], episode_result["length_std"], episode_result["success_percent"],
-                    training_stats[0], training_stats[1], training_stats[3], training_stats[2], torch.mean(self.buffer.values), torch.mean(self.buffer.advantages))
+            rm = episode_result.get("reward_mean", 0.0)
+            rs = episode_result.get("reward_std", 0.0)
+            lm = episode_result.get("length_mean", 0.0)
+            ls = episode_result.get("length_std", 0.0)
+            sp = episode_result.get("success_percent", None)
+            
+            if sp is not None:
+                result = (
+                    "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f} success={:.2f} "
+                    "pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f} value={:.3f} advantage={:.3f}"
+                ).format(
+                    update, rm, rs, lm, ls, sp,
+                    training_stats[0], training_stats[1], training_stats[3], training_stats[2],
+                    torch.mean(self.buffer.values), torch.mean(self.buffer.advantages)
+                )
             else:
-                result = "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f} pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f} value={:.3f} advantage={:.3f}".format(
-                    update, episode_result["reward_mean"], episode_result["reward_std"], episode_result["length_mean"], episode_result["length_std"], 
-                    training_stats[0], training_stats[1], training_stats[3], training_stats[2], torch.mean(self.buffer.values), torch.mean(self.buffer.advantages))
+                result = (
+                    "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f} "
+                    "pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f} value={:.3f} advantage={:.3f}"
+                ).format(
+                    update, rm, rs, lm, ls,
+                    training_stats[0], training_stats[1], training_stats[3], training_stats[2],
+                    torch.mean(self.buffer.values), torch.mean(self.buffer.advantages)
+                )
+            
             print(result)
 
             # Write training statistics to tensorboard
@@ -384,4 +401,5 @@ class PPOTrainer:
             pass
 
         time.sleep(1.0)
+
         exit(0)
