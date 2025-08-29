@@ -2,6 +2,8 @@ import torch
 from docopt import docopt
 from trainer import PPOTrainer
 from yaml_parser import YamlParser
+import sys
+import traceback
 
 def main():
     # Command line arguments via docopt
@@ -18,6 +20,7 @@ def main():
     options = docopt(_USAGE)
     run_id = options["--run-id"]
     cpu = options["--cpu"]
+
     # Parse the yaml config file. The result is a dictionary, which is passed to the trainer.
     config = YamlParser(options["--config"]).get_config()
 
@@ -34,5 +37,11 @@ def main():
     trainer.run_training()
     trainer.close()
 
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("ERROR during training:", str(e), file=sys.stderr)
+        traceback.print_exc()
+        sys.exit(1)
