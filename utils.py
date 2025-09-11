@@ -3,6 +3,11 @@ from environments.minigrid_env import Minigrid
 from environments.poc_memory_env import PocMemoryEnv
 from environments.memory_gym_env import MemoryGymWrapper
 
+try:
+    from environments.vizdoom_env import VizdoomEnv
+except ImportError:  # pragma: no cover
+    VizdoomEnv = None
+
 def create_env(config:dict, render:bool=False):
     """Initializes an environment based on the provided environment name.
     
@@ -19,9 +24,24 @@ def create_env(config:dict, render:bool=False):
     if config["type"] == "CartPoleMasked":
         return CartPole(mask_velocity=True, realtime_mode = render)
     if config["type"] == "Minigrid":
-        return Minigrid(env_name = config["name"], realtime_mode = render)
+        return Minigrid(
+            env_name=config["name"],
+            view_size=config.get("view_size", 3),
+            tile_size=config.get("tile_size", 28),
+            realtime_mode=render,
+        )
     if config["type"] == "MemoryGym":
-        return MemoryGymWrapper(env_name = config["name"], reset_params=config["reset_params"], realtime_mode = render)
+        return MemoryGymWrapper(env_name=config["name"], reset_params=config["reset_params"], realtime_mode=render)
+    if config["type"] == "Vizdoom":
+        if VizdoomEnv is None:
+            raise ImportError("VizdoomEnv requires the vizdoom package to be installed")
+        return VizdoomEnv(
+            config_path=config["config"],
+            scenario_path=config.get("scenario"),
+            frame_skip=config.get("frame_skip", 4),
+            resolution=config.get("resolution", "RES_160X120"),
+            realtime_mode=render,
+        )
 
 def polynomial_decay(initial:float, final:float, max_decay_steps:int, power:float, current_step:int) -> float:
     """Decays hyperparameters polynomially. If power is set to 1.0, the decay behaves linearly. 

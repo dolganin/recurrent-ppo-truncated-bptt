@@ -26,7 +26,9 @@ class CartPole:
         return obs * self._obs_mask
 
     def step(self, action):
-        obs, reward, done, truncation, info = self._env.step(action[0])
+        if isinstance(self._env.action_space, gym.spaces.Discrete) and hasattr(action, "__len__"):
+            action = int(action[0])
+        obs, reward, done, truncation, info = self._env.step(action)
         self._rewards.append(reward)
         if done or truncation:
             info = {"reward": sum(self._rewards),
