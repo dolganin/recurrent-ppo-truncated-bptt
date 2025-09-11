@@ -89,7 +89,10 @@ class PocMemoryEnv():
         done = False
         info = None
         success = False
-        action = action[0]
+        if isinstance(self.action_space, spaces.Discrete):
+            action = int(action[0])
+        else:
+            action = action
 
         if self._num_show_steps > self._step_count:
             # Execute the agent action if agent is allowed to move

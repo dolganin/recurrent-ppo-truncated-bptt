@@ -4,6 +4,7 @@ import torch
 from docopt import docopt
 from model import ActorCriticModel
 from utils import create_env
+from gymnasium import spaces
 
 def main():
     # Command line arguments via docopt
@@ -29,7 +30,16 @@ def main():
     env = create_env(config["environment"], render=True)
 
     # Initialize model and load its parameters
-    model = ActorCriticModel(config, env.observation_space, (env.action_space.n,))
+    action_space = env.action_space
+    if isinstance(action_space, spaces.Discrete):
+        action_space_shape = (action_space.n,)
+    elif isinstance(action_space, spaces.MultiDiscrete):
+        action_space_shape = tuple(action_space.nvec)
+    elif isinstance(action_space, spaces.MultiBinary):
+        action_space_shape = tuple([2] * action_space.n)
+    else:
+        raise NotImplementedError("Unsupported action space type")
+    model = ActorCriticModel(config, env.observation_space, action_space_shape)
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()

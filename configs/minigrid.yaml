@@ -1,6 +1,8 @@
 environment:
     type: "Minigrid"
     name: "MiniGrid-MemoryS13-v0"
+    view_size: 3
+    tile_size: 28
 gamma: 0.99
 lamda: 0.95
 updates: 650
